@@ -7,6 +7,9 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <base64.h>
+#include <mbedtls/sha256.h>
+
 #include "secrets.h"
 
 /* TOF */
@@ -29,7 +32,8 @@ int status = LEAVING;
 
 const char* ssid = WIFI_SSID; // SSID
 const char* password = WIFI_PASSWD; // PASSWORD
-
+const char* switchbotToken = SWITCHBOT_TOKEN;
+const char* switchbotSecret = SWITCHBOT_SECRET;
 StaticJsonDocument<255> json_request;
 char buffer[255];
 const char *host = PAYMO_URL;
@@ -88,6 +92,7 @@ void loop() {
       if (dist < 300){
         status = AT_SEAT;
         Serial.println("STATUS: AT_SEAT");
+        send_plug(false);
       }
   }else if (status == AT_SEAT){
     count++;
@@ -238,4 +243,62 @@ void send_entry(uint16_t sec){
   int status_code = http.POST((uint8_t*)buffer, strlen(buffer));
   Serial.printf("status_code=%d\r\n", status_code);
   http.end();
+}
+
+#define SHA256_SIZE 32
+//*************************************************
+//Reference: https://github.com/igrr/axtls-8266/blob/master/crypto/hmac.c
+//License axTLS 1.4.9 Copyright (c) 2007-2016, Cameron Rich
+void ssl_hmac_sha256(uint8_t *msg, int length, const uint8_t *key, int key_len, unsigned char *digest) {
+  mbedtls_sha256_context context;
+  uint8_t k_ipad[64];
+  uint8_t k_opad[64];
+  int i;
+ 
+  memset(k_ipad, 0, sizeof k_ipad);
+  memset(k_opad, 0, sizeof k_opad);
+  memcpy(k_ipad, key, key_len);
+  memcpy(k_opad, key, key_len);
+ 
+  for (i = 0; i < 64; i++)
+  {
+    k_ipad[i] ^= 0x36;
+    k_opad[i] ^= 0x5c;
+  }
+ 
+  mbedtls_sha256_starts(&context,0);
+  mbedtls_sha256_update(&context, k_ipad, 64);
+  mbedtls_sha256_update(&context, msg, length);
+  mbedtls_sha256_finish(&context, digest);
+  mbedtls_sha256_starts(&context,0);
+  mbedtls_sha256_update(&context, k_opad, 64);
+  mbedtls_sha256_update(&context, digest, SHA256_SIZE);
+  mbedtls_sha256_finish(&context, digest);
+}
+
+void send_plug(bool onOff){
+  String t = String(millis());
+  String nonce = String("API");
+  String toSign = String(switchbotToken) + "1234567890123" + nonce;
+  Serial.printf("%s\r\n", toSign.c_str());
+  String signing_key = String(switchbotSecret);
+
+  unsigned char digestkey[32];
+  mbedtls_sha256_context context;
+ 
+  mbedtls_sha256_starts(&context,0);
+  mbedtls_sha256_update(&context, (uint8_t*) signing_key.c_str(), (int)signing_key.length());
+  mbedtls_sha256_finish(&context, digestkey);
+ 
+  uint8_t digest[32];
+  ssl_hmac_sha256((uint8_t*) toSign.c_str(), (int)toSign.length(), digestkey, SHA256_SIZE, digest);
+
+  HTTPClient http;
+  Serial.printf("digest=%s\r\n",digest);
+  http.begin(host);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("t", t.c_str());
+  http.addHeader("sign", base64::encode(digest, SHA256_SIZE).c_str());
+  http.addHeader("nonce", nonce);
+  http.addHeader("Authorization", switchbotToken);
 }
