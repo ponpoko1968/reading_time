@@ -9,7 +9,8 @@
 #include <ArduinoJson.h>
 #include <base64.h>
 #include <mbedtls/sha256.h>
-
+#include <UUID.h>
+#include "time.h"
 #include "secrets.h"
 
 /* TOF */
@@ -47,6 +48,7 @@ void setup() {
   M5.Lcd.setCursor(30, 70);
   M5.Lcd.setTextColor(WHITE);
   M5.Lcd.setTextSize(2);
+  
   //---osmar
   // put your setup code here, to run once:
   Wire.begin();        // join i2c bus (address optional for master)
@@ -61,6 +63,8 @@ void setup() {
             
     Serial.print(".");
   }
+  configTime(0, 0, "ntp.nict.jp");
+
   Serial.println("connected");
 }
 
@@ -266,6 +270,7 @@ long hmac_sha256(const char *p_key, const char *p_payload, unsigned char *p_hmac
 
 void send_plug(bool onOff){
 
+
   // set POST params
   StaticJsonDocument<255> json_request;
   char buffer[255];
@@ -275,24 +280,29 @@ void send_plug(bool onOff){
   serializeJson(json_request, buffer, sizeof(buffer));
 
   // calc auth headers
-  unsigned char digest[SHA256_SIZE];
-  char tBuf[32];
-  sprintf(tBuf, "%013d", millis);
-  String nonce = String("API");
-  String toSign = String(switchbotToken) + String(tBuf) + nonce;
+  time_t _time;
+  time(&_time);
+  String t =  String(_time) + String("000");
+  UUID uuid;
+  String nonce = String("19e5c091a49d4f308ce678942f505247");
+  Serial.print(String("t=") + t + String("\r\n"));
+
+  String toSign = String(switchbotToken) + t + nonce;
   Serial.printf("toSign=%s\r\n", toSign.c_str());
 
+  unsigned char digest[SHA256_SIZE];
   hmac_sha256(switchbotSecret, toSign.c_str(), digest);
 
   String sign = base64::encode(digest, SHA256_SIZE);
+  Serial.printf("nonce=%s\r\n",nonce.c_str());
   Serial.printf("sign=%s\r\n",sign.c_str());
 
   HTTPClient http;
   http.begin(SWITCHBOT_URL);
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("Authorization", SWITCHBOT_TOKEN);
+  http.addHeader("Content-Type", "application/json; charset=utf8");
+  http.addHeader("Authorization", switchbotToken);
 
-  http.addHeader("t", tBuf);
+  http.addHeader("t", t.c_str());
   http.addHeader("sign", sign.c_str());
   http.addHeader("nonce", nonce.c_str());
 
