@@ -70,7 +70,7 @@ uint16_t count = 0;
 void loop() {
   delay(1000);
   bool valid = false;
-  uint16_t dist = get_distance(&valid);
+  uint16_t dist = get_distance(&valid); // センサーと対象物（身体）の距離（cm単位）
   if( status == LEAVING ){
         M5.Lcd.fillScreen(BLACK);
         M5.Axp.ScreenBreath( 7 );
@@ -92,7 +92,7 @@ void loop() {
       if (dist < 300){
         status = AT_SEAT;
         Serial.println("STATUS: AT_SEAT");
-        send_plug(false);
+        send_plug(true);
       }
   }else if (status == AT_SEAT){
     count++;
@@ -101,6 +101,7 @@ void loop() {
         if (count > 60){
           send_entry(count);
         }
+        send_plug(false);
         count = 0;
         M5.Lcd.setCursor(30, 120);
         M5.Lcd.printf("%02d:%02d:%02d", count / 3600, (count % 3600) / 60, count % 60 );
@@ -246,59 +247,56 @@ void send_entry(uint16_t sec){
 }
 
 #define SHA256_SIZE 32
-//*************************************************
-//Reference: https://github.com/igrr/axtls-8266/blob/master/crypto/hmac.c
-//License axTLS 1.4.9 Copyright (c) 2007-2016, Cameron Rich
-void ssl_hmac_sha256(uint8_t *msg, int length, const uint8_t *key, int key_len, unsigned char *digest) {
-  mbedtls_sha256_context context;
-  uint8_t k_ipad[64];
-  uint8_t k_opad[64];
-  int i;
- 
-  memset(k_ipad, 0, sizeof k_ipad);
-  memset(k_opad, 0, sizeof k_opad);
-  memcpy(k_ipad, key, key_len);
-  memcpy(k_opad, key, key_len);
- 
-  for (i = 0; i < 64; i++)
-  {
-    k_ipad[i] ^= 0x36;
-    k_opad[i] ^= 0x5c;
-  }
- 
-  mbedtls_sha256_starts(&context,0);
-  mbedtls_sha256_update(&context, k_ipad, 64);
-  mbedtls_sha256_update(&context, msg, length);
-  mbedtls_sha256_finish(&context, digest);
-  mbedtls_sha256_starts(&context,0);
-  mbedtls_sha256_update(&context, k_opad, 64);
-  mbedtls_sha256_update(&context, digest, SHA256_SIZE);
-  mbedtls_sha256_finish(&context, digest);
+
+long hmac_sha256(const char *p_key, const char *p_payload, unsigned char *p_hmacResult)
+{
+  mbedtls_md_context_t ctx;
+  mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+  mbedtls_md_init(&ctx);
+  mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 1);
+  mbedtls_md_hmac_starts(&ctx, (const unsigned char*)p_key, strlen(p_key));
+  mbedtls_md_hmac_update(&ctx, (const unsigned char*)p_payload, strlen(p_payload));
+  mbedtls_md_hmac_finish(&ctx, p_hmacResult); // 32 bytes
+  mbedtls_md_free(&ctx);
+
+  return 0;
 }
 
-void send_plug(bool onOff){
-  String t = String(millis());
-  String nonce = String("API");
-  String toSign = String(switchbotToken) + "1234567890123" + nonce;
-  Serial.printf("%s\r\n", toSign.c_str());
-  String signing_key = String(switchbotSecret);
 
-  unsigned char digestkey[32];
-  mbedtls_sha256_context context;
- 
-  mbedtls_sha256_starts(&context,0);
-  mbedtls_sha256_update(&context, (uint8_t*) signing_key.c_str(), (int)signing_key.length());
-  mbedtls_sha256_finish(&context, digestkey);
- 
-  uint8_t digest[32];
-  ssl_hmac_sha256((uint8_t*) toSign.c_str(), (int)toSign.length(), digestkey, SHA256_SIZE, digest);
+
+void send_plug(bool onOff){
+
+  // set POST params
+  StaticJsonDocument<255> json_request;
+  char buffer[255];
+  json_request["command"] = onOff ? "turnOn" : "turnOff";
+  json_request["parameter"] = "default";
+  json_request["commandType"] = "command";
+  serializeJson(json_request, buffer, sizeof(buffer));
+
+  // calc auth headers
+  unsigned char digest[SHA256_SIZE];
+  char tBuf[32];
+  sprintf(tBuf, "%013d", millis);
+  String nonce = String("API");
+  String toSign = String(switchbotToken) + String(tBuf) + nonce;
+  Serial.printf("toSign=%s\r\n", toSign.c_str());
+
+  hmac_sha256(switchbotSecret, toSign.c_str(), digest);
+
+  String sign = base64::encode(digest, SHA256_SIZE);
+  Serial.printf("sign=%s\r\n",sign.c_str());
 
   HTTPClient http;
-  Serial.printf("digest=%s\r\n",digest);
-  http.begin(host);
+  http.begin(SWITCHBOT_URL);
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("t", t.c_str());
-  http.addHeader("sign", base64::encode(digest, SHA256_SIZE).c_str());
-  http.addHeader("nonce", nonce);
-  http.addHeader("Authorization", switchbotToken);
+  http.addHeader("Authorization", SWITCHBOT_TOKEN);
+
+  http.addHeader("t", tBuf);
+  http.addHeader("sign", sign.c_str());
+  http.addHeader("nonce", nonce.c_str());
+
+  int status_code = http.POST((uint8_t*)buffer, strlen(buffer));
+  Serial.printf("status_code=%d\r\n", status_code);
+  http.end();
 }
