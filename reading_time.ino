@@ -41,6 +41,8 @@ const char *host = PAYMO_URL;
 
 byte gbuf[16];
 
+time_t start_time;
+
 void setup() {
   //---osmar
   M5.begin();
@@ -64,12 +66,16 @@ void setup() {
     Serial.print(".");
   }
   configTime(0, 0, "ntp.nict.jp");
-
+  delay(1000);
+  time(&start_time);
+  delay(1000);
   Serial.println("connected");
 }
 
 
 uint16_t count = 0;
+
+unsigned long start_local = 0;
 
 void loop() {
   delay(1000);
@@ -82,7 +88,9 @@ void loop() {
         M5.Axp.ScreenBreath( 12 );
         M5.Lcd.fillScreen(RED);
         M5.Lcd.setCursor(30, 120);
-        M5.Lcd.printf("%02d:%02d:%02d", count / 3600, (count % 3600) / 60, count % 60 );
+        unsigned long diff = millis() - start_local;
+        diff /= 1000;
+        M5.Lcd.printf("%02d:%02d:%02d", diff / 3600, (diff % 3600) / 60, diff % 60 );
   }
 
   if (!valid){
@@ -95,6 +103,8 @@ void loop() {
   if( status == LEAVING ){
       if (dist < 300){
         status = AT_SEAT;
+        time(&start_time);
+        start_local = millis();
         Serial.println("STATUS: AT_SEAT");
         send_plug(true);
       }
@@ -103,7 +113,12 @@ void loop() {
       if(dist > 300){
         status = LEAVING;
         if (count > 60){
-          send_entry(count);
+          time_t _time;
+          time(&_time);
+          time_t duration = _time - start_time;
+          Serial.printf("duration=%d\r\n", duration);
+          Serial.printf("count=%d\r\n", count);
+          send_entry(duration);
         }
         send_plug(false);
         count = 0;
@@ -238,7 +253,7 @@ uint16_t VL53L0X_decode_vcsel_period(short vcsel_period_reg) {
 }
 
 
-void send_entry(uint16_t sec){
+void send_entry(time_t sec){
   Serial.printf("send start.");
   json_request["reading_time"] = sec;
   serializeJson(json_request, buffer, sizeof(buffer));
