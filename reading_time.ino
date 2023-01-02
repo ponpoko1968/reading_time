@@ -41,7 +41,6 @@ const char *host = PAYMO_URL;
 
 byte gbuf[16];
 
-time_t start_time;
 
 void setup() {
   //---osmar
@@ -66,14 +65,9 @@ void setup() {
     Serial.print(".");
   }
   configTime(0, 0, "ntp.nict.jp");
-  delay(1000);
-  time(&start_time);
-  delay(1000);
   Serial.println("connected");
 }
 
-
-uint16_t count = 0;
 
 unsigned long start_local = 0;
 
@@ -94,36 +88,28 @@ void loop() {
   }
 
   if (!valid){
-    if (status == AT_SEAT){
-      count++;
-    }
     return;
   }
 
   if( status == LEAVING ){
       if (dist < 300){
         status = AT_SEAT;
-        time(&start_time);
         start_local = millis();
         Serial.println("STATUS: AT_SEAT");
         send_plug(true);
       }
   }else if (status == AT_SEAT){
-    count++;
       if(dist > 300){
         status = LEAVING;
-        if (count > 60){
-          time_t _time;
-          time(&_time);
-          time_t duration = _time - start_time;
+        unsigned long duration = millis() - start_local;
+        duration /= 1000;
+        if (duration > 60){
           Serial.printf("duration=%d\r\n", duration);
-          Serial.printf("count=%d\r\n", count);
           send_entry(duration);
         }
         send_plug(false);
-        count = 0;
         M5.Lcd.setCursor(30, 120);
-        M5.Lcd.printf("%02d:%02d:%02d", count / 3600, (count % 3600) / 60, count % 60 );
+        M5.Lcd.printf("%02d:%02d:%02d", duration / 3600, (duration % 3600) / 60, duration % 60 );
         Serial.println("STATUS: LEAVING"); 
       }
   }
@@ -253,7 +239,7 @@ uint16_t VL53L0X_decode_vcsel_period(short vcsel_period_reg) {
 }
 
 
-void send_entry(time_t sec){
+void send_entry(unsigned long sec){
   Serial.printf("send start.");
   json_request["reading_time"] = sec;
   serializeJson(json_request, buffer, sizeof(buffer));
